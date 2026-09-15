@@ -27,17 +27,19 @@ else
 fi
 
 # ── Current client identity → unlocks the newest model catalog ──────────────
-# The image impersonates antigravity/1.15.8 (its catalog tops out at gemini-3.6).
-# Google serves the model list per client version: impersonating the current
-# IDE (2.12.x) enables gemini-3.8-flash-high/-medium/-low, 3.7 tiered, etc.
-# Stored account fingerprints carry the old UA, so they are regenerated once
-# (marker file in /data) after the version bump.
+# Google serves the model list per client version; the image's 1.15.8 identity
+# caps the catalog at gemini-3.6. Impersonate the current IDE (default 2.12.2,
+# override with the ANTIGRAVITY_CLIENT_VERSION env var when Google ships newer
+# models that require a newer client) and regenerate stored fingerprints once
+# per version (marker file in /data).
 HEADERS_TS="/app/src/utils/headers.ts"
-if [ -f "$HEADERS_TS" ] && [ ! -f "/data/.client-v2.12" ]; then
-  sed -i 's/const ANTIGRAVITY_VERSION = "[0-9.]*"/const ANTIGRAVITY_VERSION = "2.12.2"/' "$HEADERS_TS" \
-    && echo "[entrypoint] impersonated client → antigravity/2.12.2 (3.8/3.7 catalog)"
+CLIENT_VERSION="${ANTIGRAVITY_CLIENT_VERSION:-2.12.2}"
+VERSION_MARKER="/data/.client-version-$CLIENT_VERSION"
+if [ -f "$HEADERS_TS" ] && [ ! -f "$VERSION_MARKER" ]; then
+  sed -i "s/const ANTIGRAVITY_VERSION = \"[0-9.]*\"/const ANTIGRAVITY_VERSION = \"$CLIENT_VERSION\"/" "$HEADERS_TS" \
+    && echo "[entrypoint] impersonated client → antigravity/$CLIENT_VERSION"
   bun -e 'const fs=require("fs");const f="/data/antigravity-accounts.json";try{const j=JSON.parse(fs.readFileSync(f,"utf8"));let n=0;for(const a of j.accounts||[]){if(a.fingerprint){delete a.fingerprint;n++}}fs.writeFileSync(f,JSON.stringify(j,null,2));console.log("[entrypoint] regenerated fingerprints for "+n+" account(s)")}catch(e){console.log("[entrypoint] fingerprint regen skipped:",e.message)}' || true
-  touch /data/.client-v2.12
+  touch "$VERSION_MARKER"
 fi
 
 # ── Self-enroll page (code-paste flow for headless/public hosts) ────────────
