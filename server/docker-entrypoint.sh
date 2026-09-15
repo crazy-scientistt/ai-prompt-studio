@@ -152,4 +152,19 @@ WIDGET_JS_SRC
   fi
 fi
 
+# ── ADD ACCOUNT → code-paste page on public hosts ────────────────────────────
+# The header button points at /oauth/start, which sends the browser straight
+# to Google and then to localhost — wrong machine on a public host (and the
+# code can get eaten by a local proxy). Locally the direct flow works and
+# stays one-click, so it is only rewritten for public deployments.
+HEADER_HTML="$FRONTEND_DIR/components/header.html"
+case "$EXTERNAL_URL" in
+  http://localhost*|http://127.0.0.1*) IS_LOCAL=1 ;;
+  *) IS_LOCAL=0 ;;
+esac
+if [ "$IS_LOCAL" = "0" ] && [ -f "$HEADER_HTML" ] && ! grep -q 'frontend/enroll.html' "$HEADER_HTML"; then
+  sed -i 's|<a href="/oauth/start"|<a href="/frontend/enroll.html"|' "$HEADER_HTML" \
+    && echo "[entrypoint] ADD ACCOUNT now opens the code-paste page (public host)"
+fi
+
 exec "$@"
