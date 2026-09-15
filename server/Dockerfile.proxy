@@ -6,6 +6,7 @@ FROM frieserpaldi/antigravity-proxy:0.7.0
 USER root
 COPY docker-entrypoint.sh /entrypoint.sh
 COPY update-routes.snippet /app/update-routes.snippet
+COPY auth-gate.snippet /app/auth-gate.snippet
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bun", "run", "src/server.ts"]

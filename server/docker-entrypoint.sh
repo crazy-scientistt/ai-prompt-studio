@@ -46,16 +46,26 @@ if [ -f "$HEADERS_TS" ]; then
   fi
 fi
 
-# ── Runtime self-update routes (check/apply new client version) ─────────────
-# Injected into the proxy server so new Antigravity client versions (which
-# unlock new model catalogs) can be adopted from the dashboard — no rebuild
-# or platform redeploy. Sits right before the /oauth-callback route.
-if [ -f "$SERVER_TS" ] && ! grep -q 'api/update/check' "$SERVER_TS"; then
-  awk '/if \(url.pathname === "\/oauth-callback"\) \{/ && !done { while ((getline line < "/app/update-routes.snippet") > 0) print line; done=1 } { print }' "$SERVER_TS" > /tmp/server.ts.new \
-    && mv /tmp/server.ts.new "$SERVER_TS" \
-    && echo "[entrypoint] runtime update routes installed (/api/update/check|apply)" \
-    || echo "[entrypoint] WARN: update routes not installed"
-fi
+# ── Server patches: inject snippets at specific route anchors ───────────────
+# The upstream if-chain returns early, so a snippet must sit BEFORE the first
+# route it needs to guard. Both injections are idempotent (guard grep).
+inject_snippet() {
+  SNIP="$1"; ANCHOR="$2"; GUARD="$3"; LABEL="$4"
+  if [ -f "$SERVER_TS" ] && [ -f "$SNIP" ] && ! grep -q "$GUARD" "$SERVER_TS"; then
+    awk -v snip="$SNIP" -v anchor="$ANCHOR" '
+      !done && index($0, anchor) > 0 { while ((getline line < snip) > 0) print line; done=1 }
+      { print }
+    ' "$SERVER_TS" > /tmp/server.ts.new \
+      && mv /tmp/server.ts.new "$SERVER_TS" \
+      && echo "[entrypoint] $LABEL injected" \
+      || echo "[entrypoint] WARN: $LABEL not injected"
+  fi
+}
+
+# 1) Access control (dashboard basic auth + API key) — before ALL routes.
+inject_snippet /app/auth-gate.snippet 'if (cleanPath === "/oauth/start") {' 'DASHBOARD_USER' 'access control gate'
+# 2) Site-wide model + runtime self-update endpoints.
+inject_snippet /app/update-routes.snippet 'if (url.pathname === "/oauth-callback") {' 'api/update/check' 'model + update routes'
 
 # ── Self-enroll page (code-paste flow for headless/public hosts) ────────────
 if [ -d "$FRONTEND_DIR" ] && [ ! -f "$FRONTEND_DIR/enroll.html" ]; then
@@ -119,13 +129,54 @@ if [ -d "$FRONTEND_DIR" ]; then
   var up=document.createElement('div');
   up.style.cssText='padding:8px 12px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.4);display:none';
   c.appendChild(up);
+  var mbox=document.createElement('div');
+  mbox.style.cssText='display:none;padding:10px 12px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.4);background:#12142B;color:#E7E9FF;border:1px solid rgba(255,255,255,.1)';
+  mbox.innerHTML='<div style="font-weight:700;margin-bottom:6px">Web app generation model</div>'+
+    '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'+
+    '<select id="aps-sm" style="background:#0B0D1E;color:#E7E9FF;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:6px 8px;max-width:240px"></select>'+
+    '<button id="aps-sm-save" style="background:#7C6CFF;color:#fff;border:0;border-radius:8px;padding:7px 12px;font-weight:700;cursor:pointer">Save</button>'+
+    '<span id="aps-sm-msg" style="font-size:12px;color:#9BA0C9"></span></div>'+
+    '<div style="font-size:11px;color:#6B6F92;margin-top:5px">Every visitor uses this model — they cannot change it.</div>';
+  c.appendChild(mbox);
   document.body.appendChild(c);
-  fetch('/api/update/check').then(function(r){return r.json()}).then(function(d){
-    if(d&&d.ok){
+  function proxyKey(){ try{ return localStorage.getItem('aps_proxy_key')||'' }catch(e){ return '' } }
+  function withKey(p){ var k=proxyKey(); return p+(k?(p.indexOf('?')>=0?'&':'?')+'key='+encodeURIComponent(k):'') }
+  function showKeyPrompt(){
+    up.style.cssText='padding:8px 12px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.4);background:#FBBF24;color:#1F2937;cursor:pointer;font-weight:700';
+    up.textContent='🔑 Enter proxy key to enable updates';
+    up.style.display='block';
+    up.onclick=function(){
+      var k=window.prompt('Paste this proxy\'s ADMIN_KEY:');
+      if(k){ try{ localStorage.setItem('aps_proxy_key',k.trim()) }catch(e){} location.reload() }
+    };
+  }
+  fetch(withKey('/api/update/check')).then(function(r){
+    if(r.status===401){ showKeyPrompt(); return null }
+    return r.json();
+  }).then(function(d){
+    if(!d)return;
+    if(d.ok){
       var badge=[].slice.call(document.querySelectorAll('span,div')).find(function(e){return /^v[0-9]+\.[0-9]+\.[0-9]+$/.test((e.textContent||'').trim())});
-      if(badge){badge.textContent='client '+d.current;badge.title='Proxy build stays v0.7.0 · impersonated Antigravity client is what gates the model catalog'}
+      if(badge){badge.textContent='client '+d.current;badge.title='Proxy build stays v0.7.0 · the impersonated Antigravity client gates the model catalog'}
+      mbox.style.display='block';
+      var sel=document.getElementById('aps-sm'), msg=document.getElementById('aps-sm-msg');
+      fetch(withKey('/v1/models')).then(function(r){return r.json()}).then(function(m){
+        var ids=((m&&m.data)||[]).map(function(x){return x.id}).filter(function(id){return /^(gemini|claude|gpt)/.test(id)}).sort();
+        ids.forEach(function(id){ var o=document.createElement('option'); o.value=id; o.textContent=id; sel.appendChild(o) });
+        var o2=document.createElement('option'); o2.value=''; o2.textContent='(automatic — newest flash)'; sel.appendChild(o2);
+        return fetch(withKey('/api/site-model')).then(function(r){return r.json()});
+      }).then(function(sm){
+        if(sm&&typeof sm.model==='string') sel.value=sm.model;
+      }).catch(function(){});
+      document.getElementById('aps-sm-save').onclick=function(){
+        msg.textContent='Saving…';
+        fetch(withKey('/api/site-model'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:sel.value})})
+          .then(function(r){return r.json()})
+          .then(function(r){ msg.textContent=r.ok?('✓ web app now uses '+(sel.value||'automatic')):('✗ '+(r.error||'failed')) })
+          .catch(function(e){ msg.textContent='✗ '+e });
+      };
     }
-    if(!d||!d.ok)return;
+    if(!d.ok)return;
     if(d.upToDate===true){
       up.style.cssText+='background:rgba(52,211,153,.14);color:#34D399';
       up.textContent='Antigravity client v'+d.current+' — up to date';
@@ -137,7 +188,7 @@ if [ -d "$FRONTEND_DIR" ]; then
       up.onclick=function(){
         up.textContent='Updating to v'+d.latest+'… restarting…';
         up.style.cursor='default';
-        fetch('/api/update/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:d.latest})})
+        fetch(withKey('/api/update/apply'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:d.latest})})
           .then(function(r){return r.json()})
           .then(function(r){
             up.textContent=r.ok?('Updated to v'+d.latest+' — reloading…'):(('✗ '+(r.error||'failed')));

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { compilePrompt, kitToText, planClips, withGenLengths, type ClipMode, type ClipOptions, type CompiledPrompt, type VideoKit } from '../engine/compiler'
-import { criticReviewKit, extractFrames, gwChat, gwStatus, DEFAULT_GATEWAY, DEFAULT_PROXY_MODEL, liveDnaFromStoryboard, liveKit, liveStoryboard, mergeDna } from '../engine/gateway'
+import { criticReviewKit, extractFrames, gwChat, gwSiteModel, gwStatus, DEFAULT_GATEWAY, DEFAULT_PROXY_MODEL, liveDnaFromStoryboard, liveKit, liveStoryboard, mergeDna } from '../engine/gateway'
 import { getModel, MODEL_ADAPTERS, snapClipLength, type ModelAdapter } from '../engine/models'
 import { orientMeta, type OrientMeta } from '../engine/orient'
 import AspectBadge, { OrientIcon } from './AspectBadge'
@@ -97,11 +97,19 @@ export default function Studio() {
       if (st.reachable && st.connected) {
         setEngine('gateway')
         setLiveModels(st.modelIds)
-        // Auto-sync the default generation model to the live catalog.
-        if (!st.modelIds.includes(store.defaultProxyModel)) {
-          const best = st.modelIds.includes(DEFAULT_PROXY_MODEL) ? DEFAULT_PROXY_MODEL : st.modelIds.find((m) => m.startsWith('gemini-3')) ?? st.modelIds[0]
-          store.setDefaultProxyModel(best)
-        }
+        // Owner-chosen model (set on the proxy) wins for everyone.
+        gwSiteModel(gatewayCfg).then((siteModel) => {
+          if (!alive) return
+          if (siteModel) {
+            if (siteModel !== store.defaultProxyModel) store.setDefaultProxyModel(siteModel)
+            return
+          }
+          // Otherwise auto-sync the default generation model to the live catalog.
+          if (!st.modelIds.includes(store.defaultProxyModel)) {
+            const best = st.modelIds.includes(DEFAULT_PROXY_MODEL) ? DEFAULT_PROXY_MODEL : st.modelIds.find((m) => m.startsWith('gemini-3')) ?? st.modelIds[0]
+            store.setDefaultProxyModel(best)
+          }
+        })
       }
     })
     return () => { alive = false }

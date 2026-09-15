@@ -9,6 +9,7 @@ import { SidebarDesktop, SidebarMobile, type Tab } from './components/Sidebar'
 import Studio from './components/Studio'
 import Toasts from './components/Toasts'
 import TopBar from './components/TopBar'
+import { gwRuntimeConfig } from './engine/gateway'
 import { StoreProvider, useStore } from './store'
 
 function readHash(): string {
@@ -30,7 +31,8 @@ function readHash(): string {
    ──────────────────────────────────────────────────────────────────────────── */
 
 function Shell() {
-  const { onboarded } = useStore()
+  const store = useStore()
+  const { onboarded } = store
   const [tab, setTab] = useState<Tab>('studio')
   const [route, setRoute] = useState<string>(readHash())
   const [collapsed, setCollapsed] = useState(false)
@@ -40,6 +42,19 @@ function Shell() {
     const onHash = () => setRoute(readHash())
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  // Hosted builds: the proxy address lives in the host's server-side env and is
+  // fetched at runtime, so it never ships in the public JS bundle. A `?proxy=`
+  // link always wins (that's the deliberate per-browser override).
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('proxy')) return
+    let alive = true
+    gwRuntimeConfig().then((cfg) => {
+      if (alive && cfg && cfg.url !== store.gateway.url) store.setGateway(cfg)
+    })
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const pageKey = route === 'admin' ? 'admin' : tab

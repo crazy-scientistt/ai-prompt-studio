@@ -12,6 +12,7 @@ export interface GatewayConfig { url: string; key?: string }
 //   VITE_PROXY_URL=https://my-proxy.up.railway.app npm run build
 // The proxy MUST sit behind this exact host:port — its OAuth redirect_uri is
 // derived from where it runs, so the dashboard URL and this URL always match.
+// On locked deployments append the access key: VITE_PROXY_URL=https://host?key=SECRET
 export const DEFAULT_GATEWAY: GatewayConfig = {
   url: ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_PROXY_URL ?? 'http://localhost:3000').replace(/\/+$/, ''),
 }
@@ -19,6 +20,24 @@ export const DEFAULT_GATEWAY: GatewayConfig = {
 // Factory default generation model — verified available on the proxy
 // (auto-corrects to the newest flash in the live catalog if absent).
 export const DEFAULT_PROXY_MODEL = 'gemini-3.8-flash-high'
+
+// Hosted builds can serve the proxy address at runtime from the hosting
+// platform's server-side env (see api/config.js) instead of baking it into the
+// public bundle. Returns null when there is nothing to override, so local dev
+// and the VITE_PROXY_URL fallback behave exactly as before.
+export async function gwRuntimeConfig(): Promise<GatewayConfig | null> {
+  try {
+    const r = await fetch('/api/config', { headers: { Accept: 'application/json' } })
+    if (!r.ok) return null
+    // A plain dev server answers unknown paths with index.html — ignore that.
+    if (!(r.headers.get('content-type') || '').includes('json')) return null
+    const j = await r.json().catch(() => null)
+    const url = typeof j?.proxyUrl === 'string' ? j.proxyUrl.trim().replace(/\/+$/, '') : ''
+    return url ? { url } : null
+  } catch {
+    return null
+  }
+}
 
 export function isModelAvailable(modelIds: string[], wanted: string): boolean {
   return modelIds.includes(wanted)
@@ -43,15 +62,31 @@ export interface GatewayStatus {
 export interface GatewayModel { id: string; name: string; notes?: string }
 
 const clean = (u: string) => u.replace(/\/+$/, '')
+// The proxy URL may carry its access key as `?key=<ADMIN_KEY>` (set once in
+// #/admin or via ?proxy=...&key=...); it is sent as a Bearer token on every
+// call. On locked deployments the proxy rejects unauthenticated callers.
+function splitKey(cfg: GatewayConfig): { url: string; key?: string } {
+  const base = clean(cfg.url)
+  try {
+    const u = new URL(base)
+    const k = u.searchParams.get('key') || cfg.key
+    u.searchParams.delete('key')
+    return { url: clean(u.toString()), key: k || undefined }
+  } catch {
+    return { url: base, key: cfg.key }
+  }
+}
 const headers = (cfg: GatewayConfig): Record<string, string> => {
+  const { key } = splitKey(cfg)
   const h: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (cfg.key) h.Authorization = `Bearer ${cfg.key}`
+  if (key) h.Authorization = `Bearer ${key}`
   return h
 }
 
 export async function gwStatus(cfg: GatewayConfig): Promise<GatewayStatus> {
   try {
-    const r = await fetch(`${clean(cfg.url)}/v1/models`, { headers: headers(cfg) })
+    const { url } = splitKey(cfg)
+  const r = await fetch(`${url}/v1/models`, { headers: headers(cfg) })
     if (!r.ok) return { reachable: true, connected: false, modelIds: [], error: `HTTP ${r.status}` }
     const j = await r.json()
     const ids: string[] = (j.data || []).map((m: { id: string }) => m.id)
@@ -108,10 +143,26 @@ export async function gwModels(cfg: GatewayConfig): Promise<GatewayModel[]> {
   return reported
 }
 
+// Site-wide generation model, set by the owner on the proxy (Railway) — the
+// web app adopts it so customers never choose the model themselves. Empty
+// string means "not set": fall back to the visitor's own default.
+export async function gwSiteModel(cfg: GatewayConfig): Promise<string> {
+  try {
+    const { url } = splitKey(cfg)
+    const r = await fetch(`${url}/api/site-model`, { headers: headers(cfg) })
+    if (!r.ok) return ''
+    const j = await r.json().catch(() => null)
+    return typeof j?.model === 'string' ? j.model : ''
+  } catch {
+    return ''
+  }
+}
+
 export async function gwPing(cfg: GatewayConfig, model?: string): Promise<{ ok: boolean; ms?: number; reply?: string; error?: string }> {
   const started = Date.now()
   try {
-    const r = await fetch(`${clean(cfg.url)}/v1/chat/completions`, {
+    const { url } = splitKey(cfg)
+  const r = await fetch(`${url}/v1/chat/completions`, {
       method: 'POST',
       headers: headers(cfg),
       body: JSON.stringify({ model: model || DEFAULT_PROXY_MODEL, messages: [{ role: 'user', content: 'Reply with exactly: PONG' }], max_tokens: 20 }),
@@ -135,7 +186,8 @@ export async function gwChatStream(
   onChunk: (text: string, kind: 'content' | 'reasoning') => void,
   maxTokens = 6000,
 ): Promise<string> {
-  const r = await fetch(`${clean(cfg.url)}/v1/chat/completions`, {
+  const { url } = splitKey(cfg)
+  const r = await fetch(`${url}/v1/chat/completions`, {
     method: 'POST',
     headers: headers(cfg),
     body: JSON.stringify({ model: model || DEFAULT_PROXY_MODEL, messages, max_tokens: maxTokens, stream: true, temperature: 0.6 }),
@@ -176,7 +228,8 @@ export async function gwChat(
   model?: string,
   maxTokens = 4096,
 ): Promise<string> {
-  const r = await fetch(`${clean(cfg.url)}/v1/chat/completions`, {
+  const { url } = splitKey(cfg)
+  const r = await fetch(`${url}/v1/chat/completions`, {
     method: 'POST',
     headers: headers(cfg),
     body: JSON.stringify({ model: model || DEFAULT_PROXY_MODEL, messages, max_tokens: maxTokens, temperature: 0.7 }),

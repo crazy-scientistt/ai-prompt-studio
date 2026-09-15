@@ -1,0 +1,39 @@
+    // ── Access control for public deployments (injected before ALL routes) ──
+    // Two independent gates, both optional, both set via Railway env vars:
+    //   DASHBOARD_USER + DASHBOARD_PASS  → HTTP Basic auth on the dashboard,
+    //      frontend files and setup/enroll pages (your "password and username
+    //      on the railway urls"). Browsers prompt natively and remember it.
+    //   ADMIN_KEY → required as Authorization: Bearer <key> (or ?key=) on the
+    //      data/control planes: /v1/* (chat + models) and /api/* (status,
+    //      config, accounts, update). This is what stops strangers from
+    //      draining the enrolled Google account's quota.
+    // Health check stays open so platform monitors work.
+    // CORS: the upstream routes stamp this themselves; our injected routes must
+    // too or browsers block the web app from reading them cross-origin.
+    const __CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "Authorization, Content-Type", "Access-Control-Allow-Methods": "GET, POST, OPTIONS" };
+    const __sendJson = (obj: any, status?: number) => Response.json(obj, { status: status || 200, headers: __CORS });
+    const __DASH_AUTH = process.env.DASHBOARD_USER && process.env.DASHBOARD_PASS
+      ? "Basic " + Buffer.from(process.env.DASHBOARD_USER + ":" + process.env.DASHBOARD_PASS).toString("base64")
+      : null;
+    const __API_KEY = process.env.ADMIN_KEY || null;
+    // Open health probe: platforms (Railway, uptime monitors) need an
+    // unauthenticated endpoint to verify the service is up.
+    if (cleanPath === "/health") {
+      return __sendJson({ ok: true, service: "antigravity-proxy", client: process.env.ANTIGRAVITY_CLIENT_VERSION || "current" });
+    }
+    const __isFront = !(cleanPath.startsWith("/v1/") || cleanPath.startsWith("/api/"));
+    if (__DASH_AUTH && __isFront && cleanPath !== "/health") {
+      if (req.headers.get("authorization") !== __DASH_AUTH) {
+        return new Response("Authentication required", {
+          status: 401,
+          headers: { "WWW-Authenticate": 'Basic realm="Antigravity Proxy", charset="UTF-8"', "Content-Type": "text/plain" },
+        });
+      }
+    }
+    if (__API_KEY && !__isFront && cleanPath !== "/health") {
+      const __got = (req.headers.get("authorization") || "").replace(/^Bearer /i, "") || url.searchParams.get("key") || "";
+      if (__got !== __API_KEY) {
+        return __sendJson({ error: { message: "Unauthorized — missing or wrong ADMIN_KEY", type: "auth_error", code: 401 } }, 401);
+      }
+    }
+

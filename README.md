@@ -26,13 +26,16 @@ connected Google account.
    Dockerfile path.
 3. After the first deploy, set these **Variables** on the service:
 
-   | Variable | Value |
-   |---|---|
-   | `EXTERNAL_URL` | `https://<your-service>.up.railway.app` (no trailing slash) |
-   | `BASE_URL` | same as `EXTERNAL_URL` |
-   | `SAFETY_THRESHOLD` | `BLOCK_NONE` |
+   | Variable | Value | Why |
+   |---|---|---|
+   | `EXTERNAL_URL` | `https://<your-service>.up.railway.app` (no trailing slash) | Post-login redirect target |
+   | `BASE_URL` | same as `EXTERNAL_URL` | Used by the upstream image |
+   | `SAFETY_THRESHOLD` | `BLOCK_NONE` | Stops upstream over-censoring |
+   | `ADMIN_KEY` | long random string (e.g. `openssl rand -hex 24`) | **Locks the API**: `/v1/*` + `/api/*` require it. Without it anyone who finds the URL can spend your Google quota |
+   | `DASHBOARD_USER` | your username | **Locks the dashboard** (browser password prompt) |
+   | `DASHBOARD_PASS` | your password | Required with `DASHBOARD_USER` |
 
-   Redeploy once after adding them.
+   Redeploy once after adding them. `/health` stays open for platform monitors.
 4. **Settings → Volumes → attach a volume** mounted at **`/data`** — this is where
    enrolled accounts (`antigravity-accounts.json`) live. Without it, the account
    is lost on every redeploy.
@@ -60,9 +63,17 @@ connected Google account.
 1. In Vercel: **Add New → Project** → import the same GitHub repo.
 2. Framework preset **Vite** is auto-detected (`vercel.json` is included). Build
    command `npm run build`, output `dist` — no changes needed.
-3. Optional env var: `VITE_PROXY_URL=https://<your-service>.up.railway.app`
-   (build-time default for all visitors).
-4. Deploy.
+3. Add the proxy address as a **server-side** env var (recommended):
+
+   | Variable | Value |
+   |---|---|
+   | `PROXY_URL` | `https://<your-service>.up.railway.app` — append `?key=<ADMIN_KEY>` when the proxy is locked |
+
+   It is served at runtime by `api/config.js` (`GET /api/config`) and read by
+   the app on load, so the proxy address and key never ship inside the JS
+   bundle, and changing them needs no code edit.
+4. Deploy. (Optional fallback: `VITE_PROXY_URL` is baked in at build time —
+   fine for a local or private deployment, but it is readable in DevTools.)
 
 **Without a rebuild**, you can point any deployment at any proxy by opening:
 `https://<app>.vercel.app/?proxy=https://<your-service>.up.railway.app`
@@ -120,11 +131,57 @@ public/         static assets
 tests/          Playwright UI regression suite
 ```
 
-## Security notes
+## Choosing the web app's generation model (from the proxy)
 
-- Google OAuth tokens live **only** inside the proxy container's `/data` volume —
-  never in the repo, never in the browser.
-- No secrets are committed. `VITE_*` vars are public by design (baked into JS);
-  keep the proxy URL un-gated or add your own auth layer before charging users.
-- Credits/history currently persist in the browser (localStorage). Move them
-  server-side before taking payments.
+The model every customer uses is decided **on the proxy**, not in the app:
+
+- Open the Railway dashboard → floating widget (bottom-right) →
+  **Web app generation model** → pick a model → **Save**
+- The web app reads it on load and uses it for every visitor. Customers cannot
+  change it (there is no model picker in the customer UI).
+- Leave it on **(automatic — newest flash)** and the app picks the newest
+  available flash itself.
+- Under the hood: `GET/POST /api/site-model` (key protected) stores the choice
+  in `/data/site-model.json`.
+
+## Security (public deployments)
+
+| Surface | Protection |
+|---|---|
+| Dashboard, `frontend/*`, enroll page | `DASHBOARD_USER` + `DASHBOARD_PASS` → browser Basic-auth prompt |
+| `/v1/*` (models, chat) and `/api/*` (status, config, site-model, update) | `ADMIN_KEY` → `Authorization: Bearer <key>` or `?key=` |
+| `/health` | open (monitoring) |
+| Google account tokens | only in the proxy container's `/data` volume — never in the repo |
+| Admin console in the web app | hidden; `#/admin` is PIN-gated by `VITE_ADMIN_PIN` |
+
+The proxy address (and its `?key=`) is read at runtime from `PROXY_URL` via
+`/api/config`, so it does **not** sit in the public bundle. That raises the bar —
+a browser still has to make the call before it can see the value, and an endpoint
+by definition has to be reachable by whoever uses it — so treat this as a strong
+deterrent, not a wall.
+
+What actually protects your Google quota in order of strength:
+
+1. `ADMIN_KEY` — nobody can call `/v1/*` without it.
+2. `DASHBOARD_USER` / `DASHBOARD_PASS` — your management surface is private.
+3. Rate/credit limits per customer — the real answer for a paid product.
+
+Before charging money, put a small backend between customers and the proxy:
+real logins, a credits ledger, payment webhooks and the proxy key held
+server-side. Everything a browser can read can eventually be extracted.
+
+## Payments (before you charge customers)
+
+Stripe is not available to Pakistani merchants and PayPal cannot receive, so the
+working combination is **one local gateway + one merchant-of-record**:
+
+| Need | Recommended | Why |
+|---|---|---|
+| Local cards + JazzCash + EasyPaisa in a **single** integration | **Safepay** or **Paymob Pakistan** (PayFast by APPS as the wide-coverage alternative, incl. Raast) | One API/SDK for all three methods, PCI-DSS, tokenization + recurring/subscription APIs, ~2-3.5% MDR, T+1 to T+3 settlement, onboarding in days |
+| International customers paying by card | **Lemon Squeezy** or **Paddle** (merchant of record) | Pakistan is supported for payouts; they handle global VAT/sales tax and dispute liability as the seller of record, ~5% + $0.50 |
+| Wallets only, no cards | JazzCash / easypaisa direct merchant accounts | Cheapest per wallet transaction, but limited card processing — pair them with a PSP rather than using them alone |
+
+Fees, approval and settlement terms move fast in this market — confirm current
+numbers with each provider during onboarding. Whichever you pick, the credit is
+granted by a **server-side webhook handler**, never by the browser: the client
+only starts the checkout and then polls for the granted balance.

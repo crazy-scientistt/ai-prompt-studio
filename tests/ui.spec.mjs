@@ -186,7 +186,77 @@ test.describe('primary flows (desktop)', () => {
 
     await goTab(page, 'Settings')
     await expect(page.locator('text=Deep reasoning QA').first()).toBeVisible()
+    // The admin console link must never be shown to customers (only when the
+    // build sets VITE_ADMIN_PIN, which the test build does not).
+    await expect(page.locator('a[href="#/admin"]')).toHaveCount(0)
     await goTab(page, 'My Assets')
     await expect(page.locator('text=/Your library is empty|Upload Asset/').first()).toBeVisible()
+  })
+
+  test('the proxy-set site model drives the app model (skips when no proxy)', async ({ page }) => {
+    // Requires a running proxy on localhost:3000 with a site model set; skipped
+    // elsewhere so the suite stays green without one.
+    let proxyUp = false
+    try {
+      const r = await fetch('http://localhost:3000/api/site-model')
+      proxyUp = r.ok
+    } catch { proxyUp = false }
+    test.skip(!proxyUp, 'no local proxy on :3000')
+
+    // The shared beforeEach stub makes /v1/models look empty (connected=false),
+    // which short-circuits the site-model adoption. This test needs the real
+    // proxy, so drop the stub for it.
+    await page.unroute('**/v1/models')
+
+    const chosen = 'gemini-3.6-flash-high'
+    await fetch('http://localhost:3000/api/site-model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: chosen }),
+    })
+    const readStored = () =>
+      page.evaluate(() => {
+        try { return JSON.parse(localStorage.getItem('ai-prompt-studio-v1') || '{}').defaultProxyModel } catch { return null }
+      })
+    try {
+      await page.goto(BASE)
+      // Cold dev-server transforms can take a while — poll instead of a fixed sleep.
+      await expect.poll(readStored, { timeout: 20_000, intervals: [500, 1000, 2000] }).toBe(chosen)
+    } finally {
+      // Leave the proxy as we found it.
+      await fetch('http://localhost:3000/api/site-model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: '' }),
+      })
+    }
+  })
+
+  test('runtime /api/config supplies the proxy URL; ?proxy= still wins', async ({ page }) => {
+    const cfgUrl = 'https://cfg.example.invalid'
+    await page.route('**/api/config', (route) =>
+      route.fulfill({ json: { ok: true, proxyUrl: cfgUrl } }))
+    const stored = () =>
+      page.evaluate(() => {
+        try { return JSON.parse(localStorage.getItem('ai-prompt-studio-v1') || '{}').gateway?.url } catch { return null }
+      })
+
+    await page.goto(BASE)
+    await expect.poll(stored, { timeout: 15_000 }).toBe(cfgUrl)
+
+    // An explicit ?proxy= link is a deliberate per-browser override — it wins
+    // over the hosted config.
+    const over = 'https://manual.example.invalid'
+    await page.goto(`${BASE}/?proxy=${encodeURIComponent(over)}`)
+    await expect.poll(stored, { timeout: 15_000 }).toBe(over)
+  })
+
+  test('no /api/config (local dev) leaves the baked proxy default untouched', async ({ page }) => {
+    await page.goto(BASE)
+    await page.waitForTimeout(1200)
+    const url = await page.evaluate(() => {
+      try { return JSON.parse(localStorage.getItem('ai-prompt-studio-v1') || '{}').gateway?.url } catch { return null }
+    })
+    expect(url).toBe('http://localhost:3000')
   })
 })

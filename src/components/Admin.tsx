@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { gwChat, gwModels, gwPing, gwStatus, DEFAULT_PROXY_MODEL, prettyModelName, type GatewayModel, type GatewayStatus } from '../engine/gateway'
+import { gwChat, gwModels, gwPing, gwStatus, DEFAULT_GATEWAY, DEFAULT_PROXY_MODEL, prettyModelName, type GatewayModel, type GatewayStatus } from '../engine/gateway'
 import { useStore } from '../store'
 import { IconBolt, IconCheck, IconRefresh, IconShield, IconSpark } from './Icons'
 
@@ -44,7 +44,7 @@ function PinGate({ onUnlock }: { onUnlock: () => void }) {
 export default function Admin() {
   const store = useStore()
   const toast = store.toast
-  const gateway = store.gateway ?? { url: 'http://localhost:8791' }
+  const gateway = store.gateway ?? DEFAULT_GATEWAY
   const [status, setStatus] = useState<GatewayStatus | null>(null)
   const [models, setModels] = useState<GatewayModel[]>([])
   const [url, setUrl] = useState(gateway.url)
