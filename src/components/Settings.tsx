@@ -85,9 +85,13 @@ export default function Settings() {
           <Stat label="Analysis version" value="Video DNA 1.4" sub="temporal · camera · continuity" />
           <Stat label="Compilers" value={`${MODEL_ADAPTERS.length} active`} sub="model-specific prompt compilers" />
         </div>
-        <a href="#/admin" className="mt-4 inline-flex items-center gap-2 glass rounded-xl px-4 py-3 text-[13px] font-semibold text-lilac hover:border-white/20 transition-colors">
-          🛡️ Open Admin Engine Console →
-        </a>
+        {/* Admin console link — owner-only. Hidden on hosted builds (customers);
+            set VITE_ADMIN_PIN to enable the route with a passcode gate. */}
+        {(import.meta as unknown as { env?: Record<string, string> }).env?.VITE_ADMIN_PIN && (
+          <a href="#/admin" className="mt-4 inline-flex items-center gap-2 glass rounded-xl px-4 py-3 text-[13px] font-semibold text-lilac hover:border-white/20 transition-colors">
+            🛡️ Open Admin Engine Console →
+          </a>
+        )}
       </section>
     </div>
   )

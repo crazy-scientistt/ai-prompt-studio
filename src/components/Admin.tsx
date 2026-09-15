@@ -5,6 +5,42 @@ import { IconBolt, IconCheck, IconRefresh, IconShield, IconSpark } from './Icons
 
 type Ping = { ok: boolean; ms?: number; reply?: string; error?: string } | null
 
+// Hosted-build passcode gate. VITE_ADMIN_PIN set → customers can't reach the
+// engine console (and the Settings link to it disappears). Unset (local dev) →
+// open, as designed for development.
+const ADMIN_PIN = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_ADMIN_PIN
+
+function PinGate({ onUnlock }: { onUnlock: () => void }) {
+  const [pin, setPin] = useState('')
+  const [err, setErr] = useState(false)
+  return (
+    <div className="flex-1 min-w-0 flex flex-col items-center justify-center gap-4 py-24">
+      <div className="glass-panel rounded-2xl p-7 w-full max-w-sm text-center">
+        <IconShield className="w-8 h-8 text-lilac mx-auto" />
+        <h1 className="page-title mt-3 text-[20px]">Admin Console</h1>
+        <p className="page-description mt-1">Owner access only. Enter the admin PIN.</p>
+        <form
+          onSubmit={(e) => { e.preventDefault(); pin === ADMIN_PIN ? onUnlock() : (setErr(true), setPin('')) }}
+          className="mt-5 flex flex-col gap-3"
+        >
+          <input
+            type="password"
+            inputMode="numeric"
+            autoFocus
+            aria-label="Admin PIN"
+            value={pin}
+            onChange={(e) => { setPin(e.target.value); setErr(false) }}
+            placeholder="••••••"
+            className={`glass rounded-xl px-4 py-3 text-center text-lg tracking-[0.4em] outline-none focus:border-white/20 ${err ? 'border-red-400/60' : ''}`}
+          />
+          {err && <p className="text-[12px] text-red-300">Wrong PIN.</p>}
+          <button type="submit" className="rounded-xl px-4 py-3 text-[13px] font-bold btn-primary">Unlock</button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 export default function Admin() {
   const store = useStore()
   const toast = store.toast
@@ -16,6 +52,9 @@ export default function Admin() {
   const [ping, setPing] = useState<Ping>(null)
   const [sample, setSample] = useState('')
   const [error, setError] = useState('')
+  const [unlocked, setUnlocked] = useState(false)
+
+  if (ADMIN_PIN && !unlocked) return <PinGate onUnlock={() => setUnlocked(true)} />
 
   const defaultModel = store.defaultProxyModel || DEFAULT_PROXY_MODEL
 
