@@ -18,7 +18,7 @@ export const DEFAULT_GATEWAY: GatewayConfig = {
 
 // Factory default generation model — verified available on the proxy
 // (auto-corrects to the newest flash in the live catalog if absent).
-export const DEFAULT_PROXY_MODEL = 'gemini-3-flash'
+export const DEFAULT_PROXY_MODEL = 'gemini-3.8-flash-high'
 
 export function isModelAvailable(modelIds: string[], wanted: string): boolean {
   return modelIds.includes(wanted)
@@ -83,13 +83,29 @@ export function prettyModelName(id: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase()) + ' (Antigravity)'
 }
 
+// Tiered IDs verified live against the current client identity (2.12.x).
+// The proxy's /v1/models is built from Google's quota cache, which can lag
+// behind what actually generates — so these are always offered too.
+const VERIFIED_MODELS: GatewayModel[] = [
+  { id: 'gemini-3.8-flash-high', name: 'Gemini 3.8 Flash High (Antigravity)', notes: 'Newest flash, high thinking budget — recommended default.' },
+  { id: 'gemini-3.8-flash-medium', name: 'Gemini 3.8 Flash Medium (Antigravity)', notes: 'Newest flash, medium thinking budget.' },
+  { id: 'gemini-3.8-flash-low', name: 'Gemini 3.8 Flash Low (Antigravity)', notes: 'Newest flash, fastest.' },
+  { id: 'gemini-3.7-flash-high', name: 'Gemini 3.7 Flash High (Antigravity)', notes: 'Previous flash generation, high thinking.' },
+]
+
 export async function gwModels(cfg: GatewayConfig): Promise<GatewayModel[]> {
   const st = await gwStatus(cfg)
   if (st.modelIds.length === 0) return KNOWN_MODELS
-  return st.modelIds.map((id) => {
-    const known = KNOWN_MODELS.find((m) => m.id === id)
+  const reported = st.modelIds.map((id) => {
+    const known = [...KNOWN_MODELS, ...VERIFIED_MODELS].find((m) => m.id === id)
     return known ?? { id, name: prettyModelName(id), notes: 'Reported by the proxy for your account.' }
   })
+  // Ensure the verified tiered IDs are always present in the picker, even when
+  // the proxy's quota-derived cache has not surfaced them yet.
+  for (const vm of VERIFIED_MODELS) {
+    if (!st.modelIds.includes(vm.id)) reported.push(vm)
+  }
+  return reported
 }
 
 export async function gwPing(cfg: GatewayConfig, model?: string): Promise<{ ok: boolean; ms?: number; reply?: string; error?: string }> {
