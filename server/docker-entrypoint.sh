@@ -71,4 +71,12 @@ ENROLL_HTML
   echo "[entrypoint] wrote $FRONTEND_DIR/enroll.html"
 fi
 
+# Make the code-paste page discoverable: the upstream dashboard has no paste
+# field, so pin a small link into its UI (guarded — only injected once).
+INDEX_HTML="$FRONTEND_DIR/index.html"
+if [ -f "$INDEX_HTML" ] && ! grep -q 'frontend/enroll.html' "$INDEX_HTML"; then
+  sed -i 's|</body>|<div style="position:fixed;bottom:14px;right:14px;background:#7C6CFF;color:#fff;padding:10px 14px;border-radius:10px;font-family:system-ui,system-ui,sans-serif;font-size:13px;z-index:9999;box-shadow:0 6px 20px rgba(0,0,0,.4)">Adding another account? <a style="color:#fff;text-decoration:underline" href="/frontend/enroll.html">Paste the login code here</a></div></body>|' "$INDEX_HTML" \
+    && echo "[entrypoint] dashboard now links to the enroll page"
+fi
+
 exec "$@"
