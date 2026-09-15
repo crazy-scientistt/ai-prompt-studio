@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+*.local
+
+# Test artifacts
+test-results/
+playwright-report/
+tests/shots/
+.playwright-cli/
+
+# Local demo video (36MB, not licensed for redistribution — dev machines only)
+public/test-videos/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Working notes / one-off scripts (not part of the product)
+output/
+
+# Logs & OS junk
+*.log
+vite-dev.log
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Freebuff tool state
+.freebuff/

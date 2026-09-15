@@ -1,0 +1,46 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Prompt Studio — Antigravity proxy (open-source, standalone).
+#
+# 1) Connect account: open $EXTERNAL_URL → "Add Account" → Google sign-in →
+#    the OAuth callback lands correctly (redirect_uri is patched at startup).
+# 2) Models appear automatically in the webapp once the account is connected.
+#
+# Railway deploy: New Project → Deploy from Dockerfile → point at server/
+# (Dockerfile.proxy), then set EXTERNAL_URL=https://<service>.up.railway.app
+# and attach a volume at /data. No other changes needed.
+#
+# Still fully isolated: own compose project "aps-gateway", own network
+# "aps-isolated" — no connection to any other proxy (opencodex/global or else).
+# ─────────────────────────────────────────────────────────────────────────────
+name: aps-gateway
+
+services:
+  antigravity-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+    image: aps-antigravity-proxy:patched
+    container_name: aps-antigravity-proxy
+    restart: unless-stopped
+    ports:
+      - "3000:3000"            # local: proxy + OAuth callback live on localhost:3000
+    environment:
+      # Where the browser can actually reach this proxy. On Railway set this to
+      # your public URL (the OAuth redirect_uri is rewritten from it at start).
+      EXTERNAL_URL: "${EXTERNAL_URL:-http://localhost:3000}"
+      BASE_URL: "${EXTERNAL_URL:-http://localhost:3000}"
+      SAFETY_THRESHOLD: "BLOCK_NONE"
+      ACCOUNTS_FILE: "/data/antigravity-accounts.json"   # accounts survive restarts/deploys
+    volumes:
+      - aps-data:/data
+    networks:
+      - aps-isolated
+
+networks:
+  aps-isolated:
+    name: aps-isolated
+    driver: bridge
+
+volumes:
+  aps-data:
+    name: aps-data

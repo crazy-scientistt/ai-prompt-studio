@@ -1,0 +1,10 @@
+# Wraps the upstream proxy image so the OAuth redirect_uri matches wherever
+# this container is actually deployed (localhost OR Railway/public URL).
+# Set EXTERNAL_URL to your public address in production.
+# Runs as root because the redirect patch rewrites image-owned source at start.
+FROM frieserpaldi/antigravity-proxy:0.7.0
+USER root
+COPY docker-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["bun", "run", "src/server.ts"]
