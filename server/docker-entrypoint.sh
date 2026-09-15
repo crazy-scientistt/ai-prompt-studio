@@ -28,18 +28,33 @@ fi
 
 # ── Current client identity → unlocks the newest model catalog ──────────────
 # Google serves the model list per client version; the image's 1.15.8 identity
-# caps the catalog at gemini-3.6. Impersonate the current IDE (default 2.12.2,
-# override with the ANTIGRAVITY_CLIENT_VERSION env var when Google ships newer
-# models that require a newer client) and regenerate stored fingerprints once
-# per version (marker file in /data).
+# caps the catalog at gemini-3.6. Desired version resolution order:
+#   1. /data/.client-version   (set by the runtime self-update endpoint)
+#   2. ANTIGRAVITY_CLIENT_VERSION env var
+#   3. 2.12.2 (current IDE at time of writing)
+# Applied whenever headers.ts differs from the desired version (the container
+# filesystem reverts on every recreation — /data persists), and stored account
+# fingerprints (which cache the old user-agent) are regenerated with it.
 HEADERS_TS="/app/src/utils/headers.ts"
-CLIENT_VERSION="${ANTIGRAVITY_CLIENT_VERSION:-2.12.2}"
-VERSION_MARKER="/data/.client-version-$CLIENT_VERSION"
-if [ -f "$HEADERS_TS" ] && [ ! -f "$VERSION_MARKER" ]; then
-  sed -i "s/const ANTIGRAVITY_VERSION = \"[0-9.]*\"/const ANTIGRAVITY_VERSION = \"$CLIENT_VERSION\"/" "$HEADERS_TS" \
-    && echo "[entrypoint] impersonated client → antigravity/$CLIENT_VERSION"
-  bun -e 'const fs=require("fs");const f="/data/antigravity-accounts.json";try{const j=JSON.parse(fs.readFileSync(f,"utf8"));let n=0;for(const a of j.accounts||[]){if(a.fingerprint){delete a.fingerprint;n++}}fs.writeFileSync(f,JSON.stringify(j,null,2));console.log("[entrypoint] regenerated fingerprints for "+n+" account(s)")}catch(e){console.log("[entrypoint] fingerprint regen skipped:",e.message)}' || true
-  touch "$VERSION_MARKER"
+if [ -f "$HEADERS_TS" ]; then
+  CLIENT_VERSION="$(cat /data/.client-version 2>/dev/null || true)"
+  CLIENT_VERSION="${CLIENT_VERSION:-${ANTIGRAVITY_CLIENT_VERSION:-2.12.2}}"
+  if ! grep -q "ANTIGRAVITY_VERSION = \"$CLIENT_VERSION\"" "$HEADERS_TS"; then
+    sed -i "s/const ANTIGRAVITY_VERSION = \"[0-9.]*\"/const ANTIGRAVITY_VERSION = \"$CLIENT_VERSION\"/" "$HEADERS_TS" \
+      && echo "[entrypoint] impersonated client → antigravity/$CLIENT_VERSION"
+    bun -e 'const fs=require("fs");const f="/data/antigravity-accounts.json";try{const j=JSON.parse(fs.readFileSync(f,"utf8"));let n=0;for(const a of j.accounts||[]){if(a.fingerprint){delete a.fingerprint;n++}}fs.writeFileSync(f,JSON.stringify(j,null,2));console.log("[entrypoint] regenerated fingerprints for "+n+" account(s)")}catch(e){console.log("[entrypoint] fingerprint regen skipped:",e.message)}' || true
+  fi
+fi
+
+# ── Runtime self-update routes (check/apply new client version) ─────────────
+# Injected into the proxy server so new Antigravity client versions (which
+# unlock new model catalogs) can be adopted from the dashboard — no rebuild
+# or platform redeploy. Sits right before the /oauth-callback route.
+if [ -f "$SERVER_TS" ] && ! grep -q 'api/update/check' "$SERVER_TS"; then
+  awk '/if \(url.pathname === "\/oauth-callback"\) \{/ && !done { while ((getline line < "/app/update-routes.snippet") > 0) print line; done=1 } { print }' "$SERVER_TS" > /tmp/server.ts.new \
+    && mv /tmp/server.ts.new "$SERVER_TS" \
+    && echo "[entrypoint] runtime update routes installed (/api/update/check|apply)" \
+    || echo "[entrypoint] WARN: update routes not installed"
 fi
 
 # ── Self-enroll page (code-paste flow for headless/public hosts) ────────────
@@ -87,12 +102,54 @@ ENROLL_HTML
   echo "[entrypoint] wrote $FRONTEND_DIR/enroll.html"
 fi
 
-# Make the code-paste page discoverable: the upstream dashboard has no paste
-# field, so pin a small link into its UI (guarded — only injected once).
-INDEX_HTML="$FRONTEND_DIR/index.html"
-if [ -f "$INDEX_HTML" ] && ! grep -q 'frontend/enroll.html' "$INDEX_HTML"; then
-  sed -i 's|</body>|<div style="position:fixed;bottom:14px;right:14px;background:#7C6CFF;color:#fff;padding:10px 14px;border-radius:10px;font-family:system-ui,system-ui,sans-serif;font-size:13px;z-index:9999;box-shadow:0 6px 20px rgba(0,0,0,.4)">Adding another account? <a style="color:#fff;text-decoration:underline" href="/frontend/enroll.html">Paste the login code here</a></div></body>|' "$INDEX_HTML" \
-    && echo "[entrypoint] dashboard now links to the enroll page"
+# ── Dashboard widget: enroll link + one-click update ─────────────────────────
+# The upstream dashboard has neither a code-paste field nor update awareness,
+# so this injects a tiny floating widget (written to its own file, referenced
+# with one script tag) into the dashboard UI.
+WIDGET_JS="$FRONTEND_DIR/aps-widget.js"
+if [ -d "$FRONTEND_DIR" ]; then
+  cat > "$WIDGET_JS" <<'WIDGET_JS_SRC'
+(function(){
+  var c=document.createElement('div');
+  c.style.cssText='position:fixed;bottom:14px;right:14px;z-index:9999;display:flex;flex-direction:column;gap:8px;align-items:flex-end;font-family:system-ui,sans-serif;font-size:13px';
+  var enroll=document.createElement('div');
+  enroll.style.cssText='background:#7C6CFF;color:#fff;padding:10px 14px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.4)';
+  enroll.innerHTML='Adding another account? <a style="color:#fff;text-decoration:underline" href="/frontend/enroll.html">Paste the login code here</a>';
+  c.appendChild(enroll);
+  var up=document.createElement('div');
+  up.style.cssText='padding:8px 12px;border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.4);display:none';
+  c.appendChild(up);
+  document.body.appendChild(c);
+  fetch('/api/update/check').then(function(r){return r.json()}).then(function(d){
+    if(!d||!d.ok)return;
+    if(d.upToDate===true){
+      up.style.cssText+='background:rgba(52,211,153,.14);color:#34D399';
+      up.textContent='Antigravity client v'+d.current+' — up to date';
+      up.style.display='block';
+    }else if(d.latest){
+      up.style.cssText+='background:#7C6CFF;color:#fff;cursor:pointer;font-weight:700';
+      up.textContent='⬆ New client v'+d.latest+' available — Update now';
+      up.style.display='block';
+      up.onclick=function(){
+        up.textContent='Updating to v'+d.latest+'… restarting…';
+        up.style.cursor='default';
+        fetch('/api/update/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:d.latest})})
+          .then(function(r){return r.json()})
+          .then(function(r){
+            up.textContent=r.ok?('Updated to v'+d.latest+' — reloading…'):(('✗ '+(r.error||'failed')));
+            if(r.ok)setTimeout(function(){location.reload()},15000);
+          })
+          .catch(function(e){up.textContent='✗ '+e});
+      };
+    }
+  }).catch(function(){});
+})();
+WIDGET_JS_SRC
+  INDEX_HTML="$FRONTEND_DIR/index.html"
+  if [ -f "$INDEX_HTML" ] && ! grep -q 'aps-widget.js' "$INDEX_HTML"; then
+    sed -i 's|</body>|<script src="/frontend/aps-widget.js" defer></script></body>|' "$INDEX_HTML" \
+      && echo "[entrypoint] dashboard widget installed (enroll link + update button)"
+  fi
 fi
 
 exec "$@"

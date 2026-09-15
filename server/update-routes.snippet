@@ -1,0 +1,55 @@
+    // ── Self-update: bump the impersonated client version at runtime ─────────
+    // Google serves the model catalog per client version. These endpoints let
+    // the operator adopt a newer Antigravity client (unlocking newer models)
+    // from the dashboard — no image rebuild or platform redeploy needed.
+    // Optionally protected: set ADMIN_KEY and pass ?key=... to use them.
+    if (cleanPath === "/api/update/check" || cleanPath === "/api/update/apply") {
+      if (process.env.ADMIN_KEY && url.searchParams.get("key") !== process.env.ADMIN_KEY) {
+        return Response.json({ ok: false, error: "Unauthorized — pass ?key=<ADMIN_KEY>" }, { status: 401 });
+      }
+      try {
+        const src = await Bun.file("/app/src/utils/headers.ts").text();
+        const m = src.match(/ANTIGRAVITY_VERSION = "([^"]+)"/);
+        const current = m ? m[1] : "unknown";
+
+        if (cleanPath === "/api/update/check") {
+          let latest = "";
+          let source = "";
+          try {
+            const r = await fetch("https://antigravity.google/changelog/", { signal: AbortSignal.timeout(8000) });
+            const html = await r.text();
+            const vers = [...html.matchAll(/\bv?(2\.\d+\.\d+)\b/g)].map((x) => x[1]);
+            latest = vers.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))[0] || "";
+            source = "antigravity.google/changelog";
+          } catch { /* offline — manual entry still possible */ }
+          return Response.json({ ok: true, current, latest, upToDate: latest ? latest === current : null, source });
+        }
+
+        // apply
+        const body: any = await req.json().catch(() => ({}));
+        const version = String(body.version || "").trim();
+        if (!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) {
+          return Response.json({ ok: false, error: "Invalid version (expected 2.x.y)" }, { status: 400 });
+        }
+        if (version === current) return Response.json({ ok: true, message: `Already on ${version}`, changed: false });
+        const updated = src.replace(/const ANTIGRAVITY_VERSION = "[^"]+"/, `const ANTIGRAVITY_VERSION = "${version}"`);
+        if (!updated.includes(`ANTIGRAVITY_VERSION = "${version}"`)) {
+          return Response.json({ ok: false, error: "Patch failed — headers.ts shape unexpected" }, { status: 500 });
+        }
+        await Bun.write("/app/src/utils/headers.ts", updated);
+        // Fingerprints cache the old user-agent — clear them so the new one applies.
+        try {
+          const af = "/data/antigravity-accounts.json";
+          const j = JSON.parse(await Bun.file(af).text());
+          for (const a of j.accounts || []) delete a.fingerprint;
+          await Bun.write(af, JSON.stringify(j, null, 2));
+        } catch { /* no accounts file yet */ }
+        await Bun.write("/data/.client-version", version);
+        console.log(`[update] client ${current} → ${version}; fingerprints regenerated; restarting...`);
+        setTimeout(() => process.exit(1), 500); // restart policy brings the server back
+        return Response.json({ ok: true, changed: true, restarting: true, message: `Updated to ${version}. Server restarts in a few seconds — reload in ~15s.` });
+      } catch (e) {
+        return Response.json({ ok: false, error: String(e) }, { status: 500 });
+      }
+    }
+
