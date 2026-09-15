@@ -16,9 +16,9 @@ export const DEFAULT_GATEWAY: GatewayConfig = {
   url: ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_PROXY_URL ?? 'http://localhost:3000').replace(/\/+$/, ''),
 }
 
-// Factory default generation model — auto-syncs to the newest flash in the
-// proxy's live catalog (currently the gemini-3.6-flash family).
-export const DEFAULT_PROXY_MODEL = 'gemini-3.6-flash-medium'
+// Factory default generation model — verified available on the proxy
+// (auto-corrects to the newest flash in the live catalog if absent).
+export const DEFAULT_PROXY_MODEL = 'gemini-3-flash'
 
 export function isModelAvailable(modelIds: string[], wanted: string): boolean {
   return modelIds.includes(wanted)
