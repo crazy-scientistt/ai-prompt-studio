@@ -121,6 +121,10 @@ if [ -d "$FRONTEND_DIR" ]; then
   c.appendChild(up);
   document.body.appendChild(c);
   fetch('/api/update/check').then(function(r){return r.json()}).then(function(d){
+    if(d&&d.ok){
+      var badge=[].slice.call(document.querySelectorAll('span,div')).find(function(e){return /^v[0-9]+\.[0-9]+\.[0-9]+$/.test((e.textContent||'').trim())});
+      if(badge){badge.textContent='client '+d.current;badge.title='Proxy build stays v0.7.0 · impersonated Antigravity client is what gates the model catalog'}
+    }
     if(!d||!d.ok)return;
     if(d.upToDate===true){
       up.style.cssText+='background:rgba(52,211,153,.14);color:#34D399';
