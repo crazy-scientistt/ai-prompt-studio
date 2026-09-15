@@ -1,12 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { compilePrompt, kitToText, planClips, withGenLengths, type ClipMode, type ClipOptions, type CompiledPrompt, type VideoKit } from '../engine/compiler'
-import { criticReviewKit, extractFrames, gwChat, gwSiteModel, gwStatus, DEFAULT_GATEWAY, DEFAULT_PROXY_MODEL, liveDnaFromStoryboard, liveKit, liveStoryboard, mergeDna } from '../engine/gateway'
+import { criticReviewKit, extractFrames, gwChat, gwSiteModel, gwStatus, GatewayError, prettyModelName, DEFAULT_GATEWAY, DEFAULT_PROXY_MODEL, liveDnaFromStoryboard, liveKit, liveStoryboard, mergeDna } from '../engine/gateway'
 import { getModel, MODEL_ADAPTERS, snapClipLength, type ModelAdapter } from '../engine/models'
 import { orientMeta, type OrientMeta } from '../engine/orient'
 import AspectBadge, { OrientIcon } from './AspectBadge'
 import { analyzeVideo, fmtTime, type Mode, type VideoDna } from '../engine/videoDna'
 import { useStore, type Asset, type HistoryItem } from '../store'
-import { Btn, Dropdown, MenuItem } from './ui'
+import { Btn, Chip, Dropdown, MenuItem } from './ui'
 import Analysis from './Analysis'
 import ModelSelect from './ModelSelect'
 import VideoPlayer from './VideoPlayer'
@@ -121,6 +121,17 @@ export default function Studio() {
 
   const adapter = getModel(modelId)
 
+  // Text engines the account may choose from: the server already filtered the
+  // list by plan, so this only drops the non-chat variants and orders premium
+  // reasoning models first.
+  const engineChoices = useMemo(() => {
+    const ids = new Set(liveModels.filter((m) => /^(gemini|claude|gpt)/.test(m) && !/-(agent|image)/.test(m)))
+    if (store.defaultProxyModel) ids.add(store.defaultProxyModel)
+    return [...ids]
+      .sort((a, b) => (/^(claude|gpt)/.test(a) ? 0 : 1) - (/^(claude|gpt)/.test(b) ? 0 : 1) || b.localeCompare(a))
+      .slice(0, 6)
+  }, [liveModels, store.defaultProxyModel])
+
   // ── Upload ────────────────────────────────────────────────────────────────
   const onFile = (f: File | null) => {
     if (!f) return
@@ -195,6 +206,19 @@ export default function Studio() {
     setStage(0)
     setStreamOpen(true)
 
+    // Claim the work before any model call. One credit covers the whole
+    // analysis; the server hands back the id every call in this run carries, and
+    // refuses the run outright when the account has nothing left.
+    const claim = await store.beginAnalysis('analysis')
+    if (!claim.ok) {
+      setPhase('ready')
+      setStreamOpen(false)
+      setEngineNote('')
+      store.toast(claim.upgrade ? 'Out of credits — choose a plan to keep generating' : claim.error, '⚠️')
+      if (claim.upgrade) window.location.hash = '#/plans'
+      return
+    }
+
     const genModel = store.defaultProxyModel
 
     // Local engine: staged simulation, then compile.
@@ -211,7 +235,6 @@ export default function Studio() {
           setResult(compiled)
           setKit(compiled.kit ?? null)
           setPhase('done')
-          store.spendCredit()
           const hid = `p-${Date.now()}`
           historyIdRef.current = hid
           store.addHistory({
@@ -278,8 +301,8 @@ export default function Studio() {
             onChunk: (t) => setStreamText((s) => (s + t).slice(-6000)),
           })
           if (review.verdict === 'repair' && review.kit) {
+            // The repair pass is part of the same paid analysis — no extra credit.
             liveKitResult = review.kit
-            store.spendCredit() // repair pass costs a credit
             store.toast(`QA repaired ${review.issues.length} issue${review.issues.length === 1 ? '' : 's'} before you saw it`, '🛡️')
           }
         } catch (err) { console.warn('[critic] skipped:', err) }
@@ -299,7 +322,6 @@ export default function Studio() {
       }
       setResult(finalResult)
       setPhase('done')
-      store.spendCredit()
       const hid = `p-${Date.now()}`
       historyIdRef.current = hid
       store.addHistory({
@@ -323,7 +345,17 @@ export default function Studio() {
       setEngineNote('')
       setStreamOpen(false)
     } catch (e) {
-      // Fall back to the local engine — the beginner never sees a dead end.
+      // A plan or credit refusal is not a failure to fall back from — send the
+      // customer to the upgrade page with the server's own explanation.
+      if (e instanceof GatewayError && (e.status === 402 || e.status === 403)) {
+        setPhase('ready')
+        setStreamOpen(false)
+        setEngineNote('')
+        store.toast(e.message, '🔒')
+        window.location.hash = '#/plans'
+        return
+      }
+      // Anything else: fall back to the local engine — the beginner never sees a dead end.
       store.toast(`Live engine unavailable (${String((e as Error).message || e).slice(0, 60)}) — used local`, '⚠️')
       const finalDna = dnaRef.current ?? seeded
       const compiled = compilePrompt(adapter, finalDna, mode, 0, clipOpts)
@@ -487,6 +519,32 @@ export default function Studio() {
                 />
               </div>
             </div>
+
+            {/* Reasoning engine — Pro accounts pick it themselves. Plus and Free
+                run the owner-selected model, which the server filters per plan. */}
+            {store.user?.modelSelection && engineChoices.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[13px] font-semibold text-ink/90">Reasoning engine</span>
+                  <Chip tone="success">Pro</Chip>
+                </div>
+                <p className="mt-1 text-[11px] text-muted">
+                  Frontier models reason harder about lighting, physics and continuity. Flash is faster and cheaper.
+                </p>
+                <div className="mt-3 grid sm:grid-cols-2 gap-2">
+                  {engineChoices.map((id) => (
+                    <button
+                      key={id}
+                      onClick={() => { store.setDefaultProxyModel(id); store.toast(`${prettyModelName(id)} selected`, '🧠') }}
+                      className={`rounded-xl px-3 py-3 border text-left transition-all ${store.defaultProxyModel === id ? 'bg-violet-glow/12 border-violet-glow/40' : 'glass hover:border-white/20'}`}
+                    >
+                      <div className="text-[12.5px] font-bold">{prettyModelName(id)}</div>
+                      <div className="text-[11px] text-muted mt-1 break-all">{id}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Style mode: replacement picker */}
             {mode === 'style' && dna && (

@@ -8,6 +8,22 @@ import type { Mode, VideoDna } from './videoDna'
 
 export interface GatewayConfig { url: string; key?: string }
 
+/**
+ * A model call the server refused. `status` 402 means the plan/credits gate
+ * stopped it (no credits, or no active analysis) and 403 means the model itself
+ * is not in the caller's plan — the UI turns both into an upgrade prompt.
+ */
+export class GatewayError extends Error {
+  status: number
+  code?: string
+  constructor(message: string, status: number, code?: string) {
+    super(message)
+    this.name = 'GatewayError'
+    this.status = status
+    this.code = code
+  }
+}
+
 // Proxy base URL. Override at build time for hosted deploys (e.g. Railway):
 //   VITE_PROXY_URL=https://my-proxy.up.railway.app npm run build
 // The proxy MUST sit behind this exact host:port — its OAuth redirect_uri is
@@ -62,6 +78,32 @@ export interface GatewayStatus {
 export interface GatewayModel { id: string; name: string; notes?: string }
 
 const clean = (u: string) => u.replace(/\/+$/, '')
+// Credentials for the current deployment mode. In billing mode the gateway URL
+// is the accounts backend and the bearer is the signed-in user's session token;
+// the proxy's own key lives on the server and never reaches this code.
+let authToken: string | null = null
+let analysisId: string | null = null
+let adminKey: string | null = null
+
+/** Set (or clear) the session bearer sent with every AI call. */
+export function setGatewayAuth(token: string | null) {
+  authToken = token
+}
+
+/**
+ * The server issues an analysis id when a credit is spent (or a free recompile
+ * opens); every model call inside that analysis carries it, which is how the
+ * backend knows the work was paid for.
+ */
+export function setAnalysisId(id: string | null) {
+  analysisId = id
+}
+
+/** Owner-only bypass for the in-app ping tests against a billing backend. */
+export function setGatewayAdminKey(key: string | null) {
+  adminKey = key
+}
+
 // The proxy URL may carry its access key as `?key=<ADMIN_KEY>` (set once in
 // #/admin or via ?proxy=...&key=...); it is sent as a Bearer token on every
 // call. On locked deployments the proxy rejects unauthenticated callers.
@@ -79,7 +121,10 @@ function splitKey(cfg: GatewayConfig): { url: string; key?: string } {
 const headers = (cfg: GatewayConfig): Record<string, string> => {
   const { key } = splitKey(cfg)
   const h: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (key) h.Authorization = `Bearer ${key}`
+  const bearer = authToken || key
+  if (bearer) h.Authorization = `Bearer ${bearer}`
+  if (analysisId) h['x-analysis-id'] = analysisId
+  if (adminKey) h['x-admin-key'] = adminKey
   return h
 }
 
@@ -194,7 +239,14 @@ export async function gwChatStream(
   })
   if (!r.ok || !r.body) {
     const t = await r.text().catch(() => '')
-    throw new Error(`Stream ${r.status}: ${t.slice(0, 200)}`)
+    let msg = t
+    let code: string | undefined
+    try {
+      const j = JSON.parse(t)
+      msg = j?.error?.message || t
+      code = j?.error?.code
+    } catch { /* not JSON */ }
+    throw new GatewayError(String(msg || `Stream ${r.status}`).slice(0, 300), r.status, code)
   }
   const reader = r.body.getReader()
   const dec = new TextDecoder()
@@ -237,8 +289,13 @@ export async function gwChat(
   if (!r.ok) {
     const t = await r.text()
     let msg = t
-    try { msg = JSON.parse(t)?.error?.message || t } catch { /* raw */ }
-    throw new Error(String(msg).slice(0, 300))
+    let code: string | undefined
+    try {
+      const j = JSON.parse(t)
+      msg = j?.error?.message || t
+      code = j?.error?.code
+    } catch { /* raw */ }
+    throw new GatewayError(String(msg).slice(0, 300), r.status, code)
   }
   const j = await r.json()
   return j.choices?.[0]?.message?.content ?? ''

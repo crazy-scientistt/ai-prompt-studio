@@ -4,7 +4,9 @@ import { IconChevron, IconClock, IconCrown, IconGear, IconImage, IconLogo, IconV
 import { useStore } from '../store'
 import { Btn, Tooltip, useDialogFocus } from './ui'
 
-export type Tab = 'studio' | 'assets' | 'history' | 'settings'
+// 'plans' is reachable from the plan card and the out-of-credits prompts; it is
+// deliberately not a nav entry.
+export type Tab = 'studio' | 'assets' | 'history' | 'settings' | 'plans'
 
 const NAV: { id: Tab; label: string; icon: (p: { className?: string }) => React.JSX.Element }[] = [
   { id: 'studio', label: 'Video to Prompt', icon: IconVideo },
@@ -53,40 +55,50 @@ function NavList({ tab, onTab, onNavigate }: { tab: Tab; onTab: (t: Tab) => void
   )
 }
 
-function PlanCard() {
-  const { credits, toast } = useStore()
-  const remaining = credits.total - credits.used
-  const pct = Math.min(100, (credits.used / credits.total) * 100)
+function PlanCard({ onManage }: { onManage: () => void }) {
+  const { credits, user, billingMode } = useStore()
+
+  // Billing builds show the account's real plan; the local counter is the
+  // ledger only when no backend is configured (local dev).
+  const name = billingMode && user ? `${user.planName} plan` : 'Local mode'
+  const left = billingMode && user ? user.credits : credits.total - credits.used
+  const total = billingMode && user ? Math.max(user.monthlyCredits, user.credits) : credits.total
+  const pct = total > 0 ? Math.min(100, (left / total) * 100) : 0
+  const exhausted = billingMode && !!user && user.credits <= 0
+
   return (
     <div className="glass rounded-xl p-4">
       <div className="flex items-center gap-2 text-[13px] font-bold">
-        <IconCrown className="w-4 h-4 text-amber-300" /> Pro Plan
+        <IconCrown className="w-4 h-4 text-amber-300" /> {name}
       </div>
-      <div className="mt-2 text-[11px] text-muted tabular-nums">{remaining.toLocaleString()} / {credits.total.toLocaleString()} credits</div>
+      <div className="mt-2 text-[11px] text-muted tabular-nums">
+        {left.toLocaleString()} credits {billingMode ? 'left' : `/ ${total.toLocaleString()} used`}
+      </div>
       <div className="mt-2 h-1 rounded-full bg-white/[0.08] overflow-hidden">
-        <div className="h-full rounded-full bg-amber-200/60 transition-[width] duration-500" style={{ width: `${100 - pct}%` }} />
+        <div
+          className={`h-full rounded-full transition-[width] duration-500 ${exhausted ? 'bg-red-400/70' : 'bg-amber-200/60'}`}
+          style={{ width: `${pct}%` }}
+        />
       </div>
-      <Btn
-        variant="secondary"
-        size="sm"
-        className="mt-3 w-full"
-        onClick={() => toast('You’re on Pro — 3,000 credits included ✓', '👑')}
-      >
-        Upgrade Plan
+      <Btn variant="secondary" size="sm" className="mt-3 w-full" onClick={onManage}>
+        {exhausted ? 'Out of credits — Upgrade' : billingMode && user?.plan === 'pro' ? 'Manage plan' : 'Upgrade Plan'}
       </Btn>
     </div>
   )
 }
 
-function UserChip() {
-  const { toast } = useStore()
+function UserChip({ onAccount }: { onAccount: () => void }) {
+  const { user, billingMode } = useStore()
+  const label = billingMode ? (user?.email ?? 'Signed out') : 'Local mode'
+  const initial = (user?.email?.[0] ?? 'A').toUpperCase()
   return (
     <button
       className="mt-3 flex items-center gap-3 px-1 py-1 w-full rounded-lg hover:bg-white/[0.04] transition-colors duration-150"
-      onClick={() => toast('Account · demo mode', '👤')}
+      onClick={onAccount}
+      title={label}
     >
-      <span className="w-7 h-7 shrink-0 rounded-full bg-gradient-to-br from-lilac to-violet-glow grid place-items-center text-[12px] font-bold text-white">A</span>
-      <span className="text-[12px] font-semibold text-ink/90 truncate">Abdulrehman</span>
+      <span className="w-7 h-7 shrink-0 rounded-full bg-gradient-to-br from-lilac to-violet-glow grid place-items-center text-[12px] font-bold text-white">{initial}</span>
+      <span className="text-[12px] font-semibold text-ink/90 truncate">{label}</span>
       <IconChevron className="w-3.5 h-3.5 text-muted ml-auto shrink-0 group-hover:text-ink" />
     </button>
   )
@@ -131,8 +143,8 @@ export function SidebarDesktop({ tab, onTab, collapsed, onToggleCollapse }: Desk
         <NavList tab={tab} onTab={onTab} />
 
         <div className="mt-auto pt-4">
-          <PlanCard />
-          <UserChip />
+          <PlanCard onManage={() => onTab('plans')} />
+          <UserChip onAccount={() => onTab('plans')} />
         </div>
       </div>
 
@@ -202,8 +214,8 @@ export function SidebarMobile({ tab, onTab, mobileOpen, onMobileClose }: MobileP
         </div>
         <NavList tab={tab} onTab={onTab} onNavigate={onMobileClose} />
         <div className="mt-auto pt-4">
-          <PlanCard />
-          <UserChip />
+          <PlanCard onManage={() => { onTab('plans'); onMobileClose() }} />
+          <UserChip onAccount={() => { onTab('plans'); onMobileClose() }} />
         </div>
       </aside>
     </div>, document.body

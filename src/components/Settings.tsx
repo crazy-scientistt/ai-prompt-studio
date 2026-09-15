@@ -5,8 +5,21 @@ import { IconGear, IconShield, IconSpark } from './Icons'
 import { Toggle } from './ui'
 
 export default function Settings() {
-  const { defaultModelId, setDefaultModel, credits, toast, history, assets, deepReasoning, setDeepReasoning } = useStore()
+  const store = useStore()
+  const { defaultModelId, setDefaultModel, credits, toast, history, assets, deepReasoning, setDeepReasoning, billingMode, user, signOut } = store
   const [clearArmed, setClearArmed] = useState(false)
+
+  // Billing builds read the plan and balance from the account; local builds fall
+  // back to the browser counter.
+  const planName = billingMode ? (user?.planName ?? '—') : 'Local'
+  const balance = billingMode ? (user ? `${user.credits} credits` : '—') : `${credits.total - credits.used} credits`
+  const planSub = billingMode
+    ? user?.plan === 'free'
+      ? 'free credits to try'
+      : `${user?.monthlyCredits ?? 0} credits / month`
+    : 'browser-only counter'
+  const analysesRun = billingMode ? (user?.spentTotal ?? 0) : credits.used
+  const goPlans = () => { window.location.hash = '#/plans' }
 
   return (
     <div className="flex-1 min-w-0 flex flex-col gap-6 max-w-5xl mx-auto w-full">
@@ -44,22 +57,38 @@ export default function Settings() {
           <Toggle checked={deepReasoning} onChange={(v) => { setDeepReasoning(v); toast(v ? 'Deep reasoning QA on' : 'Deep reasoning QA off', v ? '🛡️' : '⚪') }} label="Deep reasoning QA" />
           <span className="text-[13px] font-semibold">{deepReasoning ? 'On — every kit gets audited & repaired' : 'Off — faster, single-pass generation'}</span>
         </div>
-        <div className="mt-2 text-[11px] text-muted">A repair pass costs 1 extra credit only when it actually fixes something.</div>
+        <div className="mt-2 text-[11px] text-muted">Included in the analysis — the audit and any repair it makes never costs an extra credit.</div>
       </section>
 
       <section className="glass-panel page-section">
         <h2 className="flex items-center gap-2 section-title"><IconGear className="w-[18px] h-[18px] text-lilac" /> Plan & usage</h2>
         <div className="mt-3 grid sm:grid-cols-3 gap-3">
-          <Stat label="Plan" value="Pro" sub="3,000 credits / month" />
-          <Stat label="Credits used" value={`${credits.used}`} sub={`${credits.total - credits.used} remaining`} />
-          <Stat label="Analyses run" value={`${credits.used}`} sub="1 credit = 1 full analysis" />
+          <Stat label="Plan" value={planName} sub={planSub} />
+          <Stat label="Credits" value={balance} sub={billingMode && user?.cycle ? `${user.cycle} · renews` : 'available now'} />
+          <Stat label="Analyses run" value={`${analysesRun}`} sub="1 credit = 1 full analysis" />
         </div>
+        {billingMode && user && (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button onClick={goPlans} className="rounded-xl px-4 py-3 text-[13px] font-bold btn-primary">
+              {user.plan === 'free' ? 'Choose a plan' : 'Manage plan'}
+            </button>
+            <span className="text-[12px] text-muted truncate">Signed in as {user.email}</span>
+            <button onClick={() => { signOut(); toast('Signed out', '👋') }} className="glass rounded-xl px-4 py-3 text-[13px] font-semibold hover:border-white/20 transition-colors">
+              Sign out
+            </button>
+          </div>
+        )}
         <div className="mt-3 text-[11px] text-muted">Recompiling an existing analysis for another model (Veo → Kling) costs <span className="text-ink font-semibold">0 credits</span> — the expensive part is the video analysis, not the compilation.</div>
       </section>
 
       <section className="glass-panel page-section">
         <h2 className="flex items-center gap-2 section-title"><IconShield className="w-[18px] h-[18px] text-lilac" /> Privacy</h2>
-        <p className="text-[12px] text-muted mt-1">This build runs fully in your browser. {history.length} project{history.length === 1 ? '' : 's'} and {assets.length} asset{assets.length === 1 ? '' : 's'} are stored locally and never uploaded.</p>
+        <p className="text-[12px] text-muted mt-1">
+          {history.length} project{history.length === 1 ? '' : 's'} and {assets.length} asset{assets.length === 1 ? '' : 's'} live in this browser only.
+          {billingMode
+            ? ' Your account holds the plan and credits; the video frames and your library never leave this device except as part of an analysis you start.'
+            : ' They are never uploaded.'}
+        </p>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           {!clearArmed ? (
             <button onClick={() => setClearArmed(true)} className="glass rounded-xl px-4 py-3 text-[13px] font-semibold text-red-200 hover:border-red-400/40 transition-colors">

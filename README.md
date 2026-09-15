@@ -185,3 +185,84 @@ Fees, approval and settlement terms move fast in this market — confirm current
 numbers with each provider during onboarding. Whichever you pick, the credit is
 granted by a **server-side webhook handler**, never by the browser: the client
 only starts the checkout and then polls for the granted balance.
+
+## Accounts, plans and payments (`server/api`)
+
+A small zero-dependency Node service that owns customer accounts, the plan
+catalogue, payment verification and the credits, and sits between the web app
+and the Antigravity proxy. With it deployed, the browser never sees the proxy
+key: AI calls go app → this service → proxy, and every call is checked against
+the customer's plan and balance.
+
+| Plan | Price | Credits | Models |
+|---|---|---|---|
+| Free | — | 5 to try | Gemini Flash |
+| Plus | Rs 2,000/month · Rs 19,200/year | 300/month | Gemini Flash |
+| Pro | Rs 4,000/month · Rs 38,400/year | 700/month | Flash + Claude Opus 4.6 thinking |
+
+Yearly is the 12-month total with 20% off. Credits top up monthly on both
+cycles, 1 credit = 1 full video analysis, and recompiling a finished analysis
+for another target model is free (fair-use capped). All of this lives in
+`server/api/src/plans.js` — change prices or credits there and both the pricing
+page and the enforcement follow.
+
+### 1 · Deploy the service (Railway)
+
+New service from the same repo → **Root Directory `server/api`**, Dockerfile
+`Dockerfile` → attach a volume at **`/data`** (that volume is the ledger — losing
+it loses every account) → set:
+
+| Variable | Value |
+|---|---|
+| `SESSION_SECRET` | `openssl rand -hex 32` — signs login sessions |
+| `ADMIN_KEY` | long random string — owner-only helper endpoints (`/api/admin/*`) |
+| `APP_URL` | your Vercel URL, e.g. `https://your-app.vercel.app` |
+| `PUBLIC_URL` | this service's own Railway URL (used as the payment return URL) |
+| `PROXY_URL` | the Antigravity proxy URL |
+| `PROXY_KEY` | that proxy's `ADMIN_KEY` |
+| `SAFEPAY_ENV` | `sandbox` while testing, then `production` |
+| `SAFEPAY_API_KEY` | from your Safepay dashboard |
+| `SAFEPAY_V1_SECRET` | from your Safepay dashboard |
+| `SAFEPAY_WEBHOOK_SECRET` | from your Safepay dashboard |
+| `ALLOWED_ORIGIN` | your Vercel origin (tightens CORS; defaults to `*`) |
+
+Optional tuning: `ANALYSIS_CALL_BUDGET` (default 80 model calls per credit),
+`ANALYSIS_TTL_MIN` (45), `RECOMPILE_DAILY_CAP` (12).
+
+### 2 · Point the app at it
+
+On Vercel add `BILLING_URL=https://your-billing.up.railway.app` and redeploy.
+That single variable turns on sign-in, the pricing page, server-owned credits
+and plan-gated models. (With only `PROXY_URL` set the app stays in the legacy
+no-accounts mode.)
+
+### 3 · Safepay dashboard
+
+- **Webhook URL:** `https://your-billing.up.railway.app/api/webhooks/safepay`
+- Nothing else to configure: the success/cancel URLs are sent per transaction.
+
+The success redirect and the webhook are independent, both signature-verified,
+and both idempotent — if the webhook arrives after the browser already
+redirected, the second one is a no-op. Amounts are re-checked against our own
+order, so a valid signature claiming less than the plan costs grants nothing.
+
+### 4 · Local development
+
+```bash
+npm run billing                                  # backend on :8080
+VITE_BILLING_URL=http://localhost:8080 npm run dev
+npm run test:billing                             # backend tests (no creds needed)
+```
+
+Set `SAFEPAY_MOCK=1` to exercise the whole checkout flow locally without live
+credentials. Tests: `npm test` in `server/api` covers the full money path.
+
+### Owner helpers
+
+```bash
+curl -H "x-admin-key: $ADMIN_KEY" https://your-billing/api/admin/users
+curl -X POST -H "x-admin-key: $ADMIN_KEY" -H 'Content-Type: application/json' \
+  -d '{"email":"me@example.com","credits":100}' https://your-billing/api/admin/grant
+curl -X POST -H "x-admin-key: $ADMIN_KEY" -H 'Content-Type: application/json' \
+  -d '{"email":"me@example.com","plan":"pro","cycle":"monthly"}' https://your-billing/api/admin/setplan
+```

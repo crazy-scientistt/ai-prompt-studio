@@ -9,7 +9,8 @@ import { SidebarDesktop, SidebarMobile, type Tab } from './components/Sidebar'
 import Studio from './components/Studio'
 import Toasts from './components/Toasts'
 import TopBar from './components/TopBar'
-import { gwRuntimeConfig } from './engine/gateway'
+import Auth from './components/Auth'
+import Plans from './components/Plans'
 import { StoreProvider, useStore } from './store'
 
 function readHash(): string {
@@ -32,7 +33,7 @@ function readHash(): string {
 
 function Shell() {
   const store = useStore()
-  const { onboarded } = store
+  const { onboarded, billingMode, billingReady, user } = store
   const [tab, setTab] = useState<Tab>('studio')
   const [route, setRoute] = useState<string>(readHash())
   const [collapsed, setCollapsed] = useState(false)
@@ -44,20 +45,21 @@ function Shell() {
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
 
-  // Hosted builds: the proxy address lives in the host's server-side env and is
-  // fetched at runtime, so it never ships in the public JS bundle. A `?proxy=`
-  // link always wins (that's the deliberate per-browser override).
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('proxy')) return
-    let alive = true
-    gwRuntimeConfig().then((cfg) => {
-      if (alive && cfg && cfg.url !== store.gateway.url) store.setGateway(cfg)
-    })
-    return () => { alive = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  // Billing builds put accounts in front of everything: no session, no studio.
+  // billingReady false means the boot check is still running, so we hold the
+  // shell back rather than flashing the workspace at a signed-out visitor.
+  if (billingMode && !billingReady) return <div className="min-h-[100dvh]" />
+  if (billingMode && !user)
+    return (
+      <div className="app-shell relative">
+        <Background />
+        <Auth />
+        <Toasts />
+      </div>
+    )
 
-  const pageKey = route === 'admin' ? 'admin' : tab
+  const routeName = route.split('?')[0]
+  const pageKey = routeName === 'admin' ? 'admin' : routeName === 'plans' ? 'plans' : tab
 
   return (
     <div className="app-shell flex text-ink font-sans overflow-hidden">
@@ -89,6 +91,9 @@ function Shell() {
           )}
           {pageKey === 'assets' && (
             <div key="assets" className="animate-page-in"><Assets /></div>
+          )}
+          {pageKey === 'plans' && (
+            <div key="plans" className="animate-page-in"><Plans /></div>
           )}
           {pageKey === 'settings' && (
             <div key="settings" className="animate-page-in"><Settings /></div>

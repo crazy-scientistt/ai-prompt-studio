@@ -7,7 +7,9 @@
     "dev": "vite --port 5173",
     "build": "vite build",
     "preview": "vite preview --port 5173",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "billing": "node server/api/src/server.js",
+    "test:billing": "node --test server/api/src/*.test.js"
   },
   "dependencies": {
     "react": "^18.3.1",
