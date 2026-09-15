@@ -36,9 +36,20 @@ connected Google account.
 4. **Settings → Volumes → attach a volume** mounted at **`/data`** — this is where
    enrolled accounts (`antigravity-accounts.json`) live. Without it, the account
    is lost on every redeploy.
-5. Open `https://<your-service>.up.railway.app` → **Add Account** → sign in with
-   Google. The OAuth callback now lands correctly because `EXTERNAL_URL` rewrites
-   the `redirect_uri` at container start.
+5. Connect your Google account — **important:** the OAuth client inside the
+   proxy only accepts `localhost` redirects (Google enforces this), so on a
+   public host enrollment uses a quick code paste:
+
+   1. Open `https://<your-service>.up.railway.app/frontend/enroll.html`
+   2. Click **Open Google sign-in** → choose your account → approve
+   3. The browser lands on `localhost:3000/…?code=…` (connection refused is
+      fine — you only need the address bar). Copy the `code=` value.
+      *If a local proxy is running on port 3000, stop it first or it will
+      consume the single-use code.*
+   4. Paste the code into the enroll page → **Enroll account** → ✓
+
+   Locally (docker compose on your own machine), the normal "Add Account"
+   button just works — no paste needed.
 6. Models appear automatically at `/v1/models` once the account is connected.
 
 > Railway gives every service an HTTPS URL, so the browser will not block the
@@ -61,8 +72,9 @@ The value is saved in the browser, and admins can change it any time at
 ### 3 · Connect and verify
 
 1. Open the app → `#/admin` → confirm the proxy URL and hit the ping test.
-2. If no account is enrolled yet: **Connect your Antigravity account → Open proxy
-   dashboard → Add Account → Google sign-in**.
+2. If no account is enrolled yet, use the enroll page on the proxy
+   (`/frontend/enroll.html`) per the Railway steps above — locally the normal
+   **Add Account** button works.
 3. Generate a prompt kit from any reference video end-to-end.
 
 > Moving the proxy does **not** increase the connected Google account's model

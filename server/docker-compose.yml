@@ -1,13 +1,14 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # AI Prompt Studio — Antigravity proxy (open-source, standalone).
 #
-# 1) Connect account: open $EXTERNAL_URL → "Add Account" → Google sign-in →
-#    the OAuth callback lands correctly (redirect_uri is patched at startup).
-# 2) Models appear automatically in the webapp once the account is connected.
+# Local: connect account at http://localhost:3000 → "Add Account" (normal
+# Google sign-in — the redirect_uri is loopback and works as-is).
 #
-# Railway deploy: New Project → Deploy from Dockerfile → point at server/
-# (Dockerfile.proxy), then set EXTERNAL_URL=https://<service>.up.railway.app
-# and attach a volume at /data. No other changes needed.
+# Railway/cloud deploy: New Project → Deploy from Dockerfile → point at server/
+# (Dockerfile.proxy), set EXTERNAL_URL=https://<service>.up.railway.app and
+# attach a volume at /data. On public hosts the OAuth client only allows
+# loopback redirects, so enrollment uses the code-paste page at
+# /frontend/enroll.html (the entrypoint creates it automatically).
 #
 # Still fully isolated: own compose project "aps-gateway", own network
 # "aps-isolated" — no connection to any other proxy (opencodex/global or else).
